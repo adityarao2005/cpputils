@@ -76,6 +76,8 @@ void logger::remove_handler(ref<log_handler> handler)
 // Logs the record
 void logger::log(const log_record &record)
 {
+	if (this->get_config() > record.level)
+		return;
 	// Iterates through the handlers
 	for (auto &handler : handlers)
 	{
@@ -116,6 +118,17 @@ public:
 		}
 	}
 
+	void set_config(log_level level) override
+	{
+		logger::set_config(level);
+
+		// Iterates through the loggers
+		for (auto &logger : loggers)
+		{
+			logger->set_config(level);
+		}
+	}
+
 	// Gets the instance
 	static ref<global_logger> get_instance()
 	{
@@ -137,6 +150,7 @@ public:
 		// Creates a logger
 		ref<logger> m_logger = make_ref<logger>(name);
 		m_logger->add_handler(log_handler::console_handler());
+		m_logger->set_config(this->get_config());
 		loggers.push_back(m_logger);
 		return m_logger;
 	}

@@ -86,10 +86,11 @@ namespace cpputils
 		// Log handlers
 		array_list<ref<log_handler>> handlers;
 		string m_name;
+		log_level config;
 
 	public:
 		// Default constructor
-		logger(const string &name) : m_name(name) {}
+		logger(const string &name) : m_name(name), config(log_level::DEBUG) {}
 
 		// Destructor
 		~logger();
@@ -106,6 +107,14 @@ namespace cpputils
 		// Name method
 		const string &name() const { return m_name; }
 
+		// Config
+		const log_level get_config() const { return config; }
+
+		virtual void set_config(log_level config)
+		{
+			this->config = config;
+		}
+
 		// Log level methods
 		template <typename... Args>
 		void debug(const string &context, const string &message, Args... args)
@@ -116,25 +125,25 @@ namespace cpputils
 		template <typename... Args>
 		void info(const string &context, const string &message, Args... args)
 		{
-			log({log_level::DEBUG, format(message, args...), cpputils::chrono::now(), context});
+			log({log_level::INFO, format(message, args...), cpputils::chrono::now(), context});
 		}
 
 		template <typename... Args>
 		void warning(const string &context, const string &message, Args... args)
 		{
-			log({log_level::DEBUG, format(message, args...), cpputils::chrono::now(), context});
+			log({log_level::WARNING, format(message, args...), cpputils::chrono::now(), context});
 		}
 
 		template <typename... Args>
 		void error(const string &context, const string &message, Args... args)
 		{
-			log({log_level::DEBUG, format(message, args...), cpputils::chrono::now(), context});
+			log({log_level::ERROR, format(message, args...), cpputils::chrono::now(), context});
 		}
 
 		template <typename... Args>
 		void severe(const string &context, const string &message, Args... args)
 		{
-			log({log_level::DEBUG, format(message, args...), cpputils::chrono::now(), context});
+			log({log_level::SEVERE, format(message, args...), cpputils::chrono::now(), context});
 		}
 	};
 
@@ -159,25 +168,25 @@ namespace cpputils
 		template <typename... Args>
 		static void info(const string &context, const string &message, Args... args)
 		{
-			log({log_level::DEBUG, format(message, args...), cpputils::chrono::now(), context});
+			log({log_level::INFO, format(message, args...), cpputils::chrono::now(), context});
 		}
 
 		template <typename... Args>
 		static void warning(const string &context, const string &message, Args... args)
 		{
-			log({log_level::DEBUG, format(message, args...), cpputils::chrono::now(), context});
+			log({log_level::WARNING, format(message, args...), cpputils::chrono::now(), context});
 		}
 
 		template <typename... Args>
 		static void error(const string &context, const string &message, Args... args)
 		{
-			log({log_level::DEBUG, format(message, args...), cpputils::chrono::now(), context});
+			log({log_level::ERROR, format(message, args...), cpputils::chrono::now(), context});
 		}
 
 		template <typename... Args>
 		static void severe(const string &context, const string &message, Args... args)
 		{
-			log({log_level::DEBUG, format(message, args...), cpputils::chrono::now(), context});
+			log({log_level::SEVERE, format(message, args...), cpputils::chrono::now(), context});
 		}
 	};
 
