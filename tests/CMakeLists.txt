@@ -4,6 +4,8 @@ cmake_minimum_required(VERSION 3.11-3.18)
 
 project(tests)
 
+set(CMAKE_CXX_STANDARD 20)
+
 add_executable(tests tests.cpp)
 
 # We need hello.h and the hello library

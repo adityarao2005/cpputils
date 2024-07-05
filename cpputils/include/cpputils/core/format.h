@@ -1,9 +1,9 @@
 #pragma once
 
 #include <cpputils/cpputils_api.h>
-#include <cpputils/string.h>
+#include <cpputils/core/string.h>
 #include <sstream>
-#include <cpputils/collections.h>
+#include <cpputils/core/collections.h>
 
 namespace cpputils
 {

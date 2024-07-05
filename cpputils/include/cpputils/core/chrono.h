@@ -2,7 +2,7 @@
 
 #include <cpputils/cpputils_api.h>
 #include <chrono>
-#include <cpputils/format.h>
+#include <cpputils/core/format.h>
 #include <sstream>
 #include <iomanip>
 

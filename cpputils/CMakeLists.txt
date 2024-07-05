@@ -8,7 +8,7 @@ set(BUILD_SHARED_LIBS ON)
 set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS True)
 set(CMAKE_CXX_STANDARD 20)
 
-add_library(cpputils src/cpputils.cpp src/debug.cpp src/chrono.cpp src/format.cpp)
+add_library(cpputils src/cpputils.cpp src/debug.cpp src/chrono.cpp src/format.cpp src/coroutine.cpp)
 
 # PUBLIC needed to make both hello.h and hello library available elsewhere in project
 target_include_directories(${PROJECT_NAME}
