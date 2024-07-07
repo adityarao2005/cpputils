@@ -1,331 +1,519 @@
+#pragma once
 #include <cpputils/cpputils_api.h>
 #include <cpputils/core.h>
 #include <coroutine>
 #include <optional>
+#include <iostream>
+#include <atomic>
+#include <cpputils/asyncio/reset_events.h>
+#include <cpputils/asyncio/coroutine_semantics.h>
+#include <cpputils/asyncio/sync_wait_task.h>
+#include <functional>
 
 namespace cpputils
 {
 	namespace asyncio
 	{
-		// Coroutine base class
-		class CPPUTILS_API coroutine_base
+		// Coroutines stuff
+		// - Awaitable type: A type that can be used in a co_await expression.
+		// - Awaiter type: A type that controls the resumption of a coroutine that has been suspended by a co_await expression.
+		// - Coroutine handle: A handle to a coroutine that can be used to resume execution of the coroutine.
+		// - Promise type: A type that is used to control the coroutine's execution.
+		// - Coroutine type: A type that represents a coroutine.
+		// For promise types, for initial suspend, for things that will eagerly execute, use std::suspend_never
+		// For things that'll lazily execute i.e on co_await, use std::suspend_always and use noexcept
+		// For promise types, for final suspend, it is recommended that the coroutine is suspended to perform the manual cleanup with ".destroy()" in the destructor
+
+		// You can control how co_await works within the coroutine with await_transform
+		// For example
+		/*
+		template<typename T>
+class optional_promise
+{
+  ...
+
+  template<typename U>
+  auto await_transform(std::optional<U>& value)
+  {
+	class awaiter
+	{
+	  std::optional<U>& value;
+	public:
+	  explicit awaiter(std::optional<U>& x) noexcept : value(x) {}
+	  bool await_ready() noexcept { return value.has_value(); }
+	  void await_suspend(std::coroutine_handle<>) noexcept {}
+	  U& await_resume() noexcept { return *value; }
+	};
+	return awaiter{ value };
+  }
+};
+template<typename T>
+class generator_promise
+{
+  ...
+
+  // Disable any use of co_await within this type of coroutine.
+  template<typename U>
+  std::suspend_never await_transform(U&&) = delete;
+
+};
+template<typename T, typename Executor>
+class executor_task_promise
+{
+  Executor executor;
+
+public:
+
+  template<typename Awaitable>
+  auto await_transform(Awaitable&& awaitable)
+  {
+	using cppcoro::resume_on;
+	return resume_on(this->executor, std::forward<Awaitable>(awaitable));
+  }
+};
+
+template<typename T>
+class generator_promise
+{
+  T* valuePtr;
+public:
+  ...
+
+  std::suspend_always yield_value(T& value) noexcept
+  {
+	// Stash the address of the yielded value and then return an awaitable
+	// that will cause the coroutine to suspend at the co_yield expression.
+	// Execution will then return from the call to coroutine_handle<>::resume()
+	// inside either generator<T>::begin() or generator<T>::iterator::operator++().
+	valuePtr = std::addressof(value);
+	return {};
+  }
+};
+		*/
+		// source: https://github.com/lewissbaker/cppcoro/blob/master/include/cppcoro/task.hpp
+
+		// Manual reset event
+		// Is able to set and reset events
+		// Will be able to perform this asynchronously
+
+		/// \brief
+		/// Exception thrown when you attempt to retrieve the result of
+		/// a task that has been detached from its promise/coroutine.
+		class broken_promise : public std::logic_error
 		{
 		public:
-			coroutine_base() {}
-			virtual ~coroutine_base() {}
-
-			// Resumes the coroutine
-			virtual void resume() = 0;
-			// Checks if coroutine is ready
-			virtual bool is_ready() = 0;
-			// Checks if coroutine is done
-			virtual bool is_done() = 0;
+			broken_promise()
+				: std::logic_error("broken promise")
+			{
+			}
 		};
-
-		// Coroutine promise type class
-		class coroutine_promise_type_base;
 
 		template <typename T>
-		class coroutine_promise_type;
+		class task;
 
-		// Coroutine class
-		template <typename T>
-		class coroutine : public coroutine_base
+		namespace detail
 		{
-		private:
-			// Coroutine handle
-			std::coroutine_handle<coroutine_promise_type<T>> m_handle;
-
-		public:
-			// Set promise type
-			using promise_type = coroutine_promise_type<T>;
-
-			// Constructor and destructor
-			coroutine(std::coroutine_handle<coroutine_promise_type<T>> handle) : m_handle(handle) {}
-			// Destructor
-			virtual ~coroutine()
+			class task_promise_base
 			{
-				// Destroy the handle
-				if (m_handle)
+				friend struct final_awaitable;
+
+				struct final_awaitable
 				{
-					m_handle.destroy();
-				}
-			}
+					bool await_ready() const noexcept { return false; }
 
-			// Resumes the coroutine
-			virtual void resume() override
-			{
-				m_handle.promise().set_ready(false);
-				return m_handle.resume();
-			}
-
-			// Checks if coroutine is ready
-			virtual bool is_ready() override
-			{
-				return m_handle.promise().is_ready();
-			}
-
-			// Checks if coroutine is done
-			virtual bool is_done() override
-			{
-				return m_handle.promise().is_done();
-			}
-
-			// Checks if coroutine has raised exception
-			virtual bool has_exception() const
-			{
-				return get_exception() != nullptr;
-			}
-
-			// Gets the exception
-			virtual std::exception_ptr get_exception() const
-			{
-				return m_handle.promise().get_exception();
-			}
-
-			// Gets the return value
-			auto get_return_value()
-			{
-				return m_handle.promise().get_return_value();
-			}
-		};
-
-		// Coroutine promise type class
-		class coroutine_promise_type_base
-		{
-		private:
-			// Flags
-			bool m_done;
-			bool m_ready;
-			std::exception_ptr ptr;
-
-		public:
-			// Constructor and destructor
-			coroutine_promise_type_base() : m_done(false), m_ready(true) {}
-			~coroutine_promise_type_base() {}
-
-			// Return suspend never for now
-			auto initial_suspend()
-			{
-				return std::suspend_always{};
-			}
-
-			// Return suspend always and set m_done to true
-			auto final_suspend() noexcept
-			{
-				m_done = true;
-				return std::suspend_always{};
-			}
-
-			// Unhandled exception
-			void unhandled_exception()
-			{
-				ptr = std::current_exception();
-			}
-
-			void set_ready(bool ready = true)
-			{
-				m_ready = ready;
-			}
-
-			bool is_ready() const
-			{
-				return m_ready;
-			}
-
-			bool is_done() const
-			{
-				return m_done;
-			}
-
-			std::exception_ptr get_exception() const
-			{
-				return ptr;
-			}
-		};
-
-		// Coroutine promise type class
-		template <>
-		class coroutine_promise_type<void> : public coroutine_promise_type_base
-		{
-		public:
-			// Constructor and destructor
-			coroutine_promise_type() {}
-			~coroutine_promise_type() {}
-
-			// Get return object
-			auto get_return_object() { return coroutine<void>{std::coroutine_handle<coroutine_promise_type<void>>::from_promise(*this)}; }
-
-			// Return void
-			void return_void() {}
-
-			// Get return void
-			void get_return_void() {}
-		};
-
-		// Coroutine promise type class
-		template <class T>
-		class coroutine_promise_type : public coroutine_promise_type_base
-		{
-		private:
-			// Return value
-			std::optional<T> m_value;
-
-		public:
-			// Constructor and destructor
-			coroutine_promise_type() {}
-			~coroutine_promise_type() {}
-
-			// Return value
-			void return_value(const T &value)
-			{
-				m_value = value;
-			}
-
-			// Get return value
-			std::optional<T> get_return_value()
-			{
-				return m_value;
-			}
-
-			// Get return object
-			auto get_return_object() { return coroutine<T>{std::coroutine_handle<coroutine_promise_type<T>>::from_promise(*this)}; }
-		};
-
-		class Dispatcher;
-
-		namespace internal
-		{
-
-			CPPUTILS_API ref<Dispatcher> get_worker_dispatcher();
-
-			// Main dispatcher
-			CPPUTILS_API ref<Dispatcher> get_main_dispatcher();
-
-			// IO Dispatcher
-			CPPUTILS_API ref<Dispatcher> get_io_dispatcher();
-
-			// Current Dispatcher
-			CPPUTILS_API ref<Dispatcher> get_current_dispatcher();
-		}
-
-		class Dispatcher
-		{
-		public:
-			// Queues job: if function returns false, will try again til complete
-			virtual void enqueue(std::function<bool()> func) = 0;
-
-			// Run coroutine
-			void run_coroutine(std::coroutine_handle<coroutine_promise_type<void>> handle, std::function<bool()> func)
-			{
-				enqueue(
-					[handle, func]()
+					template <typename PROMISE>
+					std::coroutine_handle<> await_suspend(
+						std::coroutine_handle<PROMISE> coro) noexcept
 					{
-						bool result = func();
-						if (result)
-							handle.promise().set_ready();
-						return result;
-					});
-			}
+						return coro.promise().m_continuation;
+					}
 
-			// Runs task async: will always complete
-			template <typename... Args>
-			void run_async(std::function<void(Args...)> func, Args... args)
-			{
-				enqueue(
-					[func, args...]()
-					{
-						func(args...);
-						return true; // Always return true
-					});
-			}
+					void await_resume() noexcept {}
+				};
 
-			// Worker dispatcher
-			static ref<Dispatcher> get_worker_dispatcher()
-			{
-				return internal::get_worker_dispatcher();
-			}
-
-			// Main dispatcher
-			static ref<Dispatcher> get_main_dispatcher()
-			{
-				return internal::get_main_dispatcher();
-			}
-
-			// IO Dispatcher
-			static ref<Dispatcher> get_io_dispatcher()
-			{
-				return internal::get_io_dispatcher();
-			}
-
-			// Current Dispatcher
-			static ref<Dispatcher> get_current_dispatcher()
-			{
-				return internal::get_current_dispatcher();
-			}
-		};
-
-		// Awaitable class
-		auto
-		operator co_await(cpputils::chrono::seconds seconds)
-		{
-			struct awaitable
-			{
-				// Seconds
-				cpputils::chrono::seconds m_seconds;
-
-				// Constructor
-				awaitable(cpputils::chrono::seconds seconds) : m_seconds(seconds) {}
-
-				// Await ready
-				bool await_ready() const
+			public:
+				task_promise_base() noexcept
 				{
-					return m_seconds.count() <= 0;
 				}
 
-				bool coroutine_method(cpputils::chrono::time_point m_start) const
+				auto initial_suspend() noexcept
 				{
-					// Check if current time is greater than seconds
-					auto m_end = cpputils::chrono::now();
-					// Check if seconds have passed
-					if (m_end - m_start >= m_seconds)
-						return true;
-					else
-						return false;
+					return std::suspend_always{};
 				}
 
-				// Await suspend
-				void await_suspend(std::coroutine_handle<> handle) const
+				auto final_suspend() noexcept
 				{
-					// Start time
-					auto m_start = cpputils::chrono::now();
-					// Get handle
-					auto m_handle = std::coroutine_handle<coroutine_promise_type<void>>::from_address(handle.address());
-					// Run coroutine
-					Dispatcher::get_worker_dispatcher()
-						->run_coroutine(m_handle, std::bind(&awaitable::coroutine_method, this, m_start));
+					return final_awaitable{};
 				}
 
-				void await_resume() const {}
+				void set_continuation(std::coroutine_handle<> continuation) noexcept
+				{
+					m_continuation = continuation;
+				}
+
+			private:
+				std::coroutine_handle<> m_continuation;
 			};
 
-			return awaitable{seconds};
+			template <typename T>
+			class task_promise final : public task_promise_base
+			{
+			public:
+				task_promise() noexcept {}
+
+				~task_promise()
+				{
+					switch (m_resultType)
+					{
+					case result_type::value:
+						m_value.~T();
+						break;
+					case result_type::exception:
+						m_exception.~exception_ptr();
+						break;
+					default:
+						break;
+					}
+				}
+
+				task<T> get_return_object() noexcept;
+
+				void unhandled_exception() noexcept
+				{
+					::new (static_cast<void *>(std::addressof(m_exception))) std::exception_ptr(
+						std::current_exception());
+					m_resultType = result_type::exception;
+				}
+
+				template <
+					typename VALUE,
+					typename = std::enable_if_t<std::is_convertible_v<VALUE &&, T>>>
+				void return_value(VALUE &&value) noexcept(std::is_nothrow_constructible_v<T, VALUE &&>)
+				{
+					::new (static_cast<void *>(std::addressof(m_value))) T(std::forward<VALUE>(value));
+					m_resultType = result_type::value;
+				}
+
+				T &result() &
+				{
+					if (m_resultType == result_type::exception)
+					{
+						std::rethrow_exception(m_exception);
+					}
+
+					assert(m_resultType == result_type::value);
+
+					return m_value;
+				}
+
+				// HACK: Need to have co_await of task<int> return prvalue rather than
+				// rvalue-reference to work around an issue with MSVC where returning
+				// rvalue reference of a fundamental type from await_resume() will
+				// cause the value to be copied to a temporary. This breaks the
+				// sync_wait() implementation.
+				// See https://github.com/lewissbaker/cppcoro/issues/40#issuecomment-326864107
+				using rvalue_type = std::conditional_t<
+					std::is_arithmetic_v<T> || std::is_pointer_v<T>,
+					T,
+					T &&>;
+
+				rvalue_type result() &&
+				{
+					if (m_resultType == result_type::exception)
+					{
+						std::rethrow_exception(m_exception);
+					}
+
+					assert(m_resultType == result_type::value);
+
+					return std::move(m_value);
+				}
+
+			private:
+				enum class result_type
+				{
+					empty,
+					value,
+					exception
+				};
+
+				result_type m_resultType = result_type::empty;
+
+				union
+				{
+					T m_value;
+					std::exception_ptr m_exception;
+				};
+			};
+
+			template <>
+			class task_promise<void> : public task_promise_base
+			{
+			public:
+				task_promise() noexcept = default;
+
+				task<void> get_return_object() noexcept;
+
+				void return_void() noexcept
+				{
+				}
+
+				void unhandled_exception() noexcept
+				{
+					m_exception = std::current_exception();
+				}
+
+				void result()
+				{
+					if (m_exception)
+					{
+						std::rethrow_exception(m_exception);
+					}
+				}
+
+			private:
+				std::exception_ptr m_exception;
+			};
+
+			template <typename T>
+			class task_promise<T &> : public task_promise_base
+			{
+			public:
+				task_promise() noexcept = default;
+
+				task<T &> get_return_object() noexcept;
+
+				void unhandled_exception() noexcept
+				{
+					m_exception = std::current_exception();
+				}
+
+				void return_value(T &value) noexcept
+				{
+					m_value = std::addressof(value);
+				}
+
+				T &result()
+				{
+					if (m_exception)
+					{
+						std::rethrow_exception(m_exception);
+					}
+
+					return *m_value;
+				}
+
+			private:
+				T *m_value = nullptr;
+				std::exception_ptr m_exception;
+			};
 		}
 
-		void run_sync(coroutine<void> coroutine)
+		/// \brief
+		/// A task represents an operation that produces a result both lazily
+		/// and asynchronously.
+		///
+		/// When you call a coroutine that returns a task, the coroutine
+		/// simply captures any passed parameters and returns exeuction to the
+		/// caller. Execution of the coroutine body does not start until the
+		/// coroutine is first co_await'ed.
+		template <typename T = void>
+		class [[nodiscard]] task
 		{
-			do
+		public:
+			using promise_type = detail::task_promise<T>;
+
+			using value_type = T;
+
+		private:
+			struct awaitable_base
 			{
-				if (coroutine.has_exception())
+				std::coroutine_handle<promise_type> m_coroutine;
+
+				awaitable_base(std::coroutine_handle<promise_type> coroutine) noexcept
+					: m_coroutine(coroutine)
 				{
-					std::rethrow_exception(coroutine.get_exception());
 				}
 
-				if (coroutine.is_ready())
+				bool await_ready() const noexcept
 				{
-					coroutine.resume();
+					return !m_coroutine || m_coroutine.done();
 				}
-			} while (!coroutine.is_done());
+
+				std::coroutine_handle<> await_suspend(
+					std::coroutine_handle<> awaitingCoroutine) noexcept
+				{
+					m_coroutine.promise().set_continuation(awaitingCoroutine);
+					return m_coroutine;
+				}
+			};
+
+		public:
+			task() noexcept
+				: m_coroutine(nullptr)
+			{
+			}
+
+			explicit task(std::coroutine_handle<promise_type> coroutine)
+				: m_coroutine(coroutine)
+			{
+			}
+
+			task(task &&t) noexcept
+				: m_coroutine(t.m_coroutine)
+			{
+				t.m_coroutine = nullptr;
+			}
+
+			/// Disable copy construction/assignment.
+			task(const task &) = delete;
+			task &operator=(const task &) = delete;
+
+			/// Frees resources used by this task.
+			~task()
+			{
+				if (m_coroutine)
+				{
+					m_coroutine.destroy();
+				}
+			}
+
+			task &operator=(task &&other) noexcept
+			{
+				if (std::addressof(other) != this)
+				{
+					if (m_coroutine)
+					{
+						m_coroutine.destroy();
+					}
+
+					m_coroutine = other.m_coroutine;
+					other.m_coroutine = nullptr;
+				}
+
+				return *this;
+			}
+
+			/// \brief
+			/// Query if the task result is complete.
+			///
+			/// Awaiting a task that is ready is guaranteed not to block/suspend.
+			bool is_ready() const noexcept
+			{
+				return !m_coroutine || m_coroutine.done();
+			}
+
+			auto operator co_await() const & noexcept
+			{
+				struct awaitable : awaitable_base
+				{
+					using awaitable_base::awaitable_base;
+
+					decltype(auto) await_resume()
+					{
+						if (!this->m_coroutine)
+						{
+							throw broken_promise{};
+						}
+
+						return this->m_coroutine.promise().result();
+					}
+				};
+
+				return awaitable{m_coroutine};
+			}
+
+			auto operator co_await() const && noexcept
+			{
+				struct awaitable : awaitable_base
+				{
+					using awaitable_base::awaitable_base;
+
+					decltype(auto) await_resume()
+					{
+						if (!this->m_coroutine)
+						{
+							throw broken_promise{};
+						}
+
+						return std::move(this->m_coroutine.promise()).result();
+					}
+				};
+
+				return awaitable{m_coroutine};
+			}
+
+			/// \brief
+			/// Returns an awaitable that will await completion of the task without
+			/// attempting to retrieve the result.
+			auto when_ready() const noexcept
+			{
+				struct awaitable : awaitable_base
+				{
+					using awaitable_base::awaitable_base;
+
+					void await_resume() const noexcept {}
+				};
+
+				return awaitable{m_coroutine};
+			}
+
+			template <typename U, typename V = T>
+				requires(!std::is_void_v<V>)
+			task<U> then(std::function<U(V)> func)
+			{
+				auto value = co_await *this;
+				co_return func(value);
+			}
+
+			template <typename V = T>
+				requires(std::is_void_v<V>)
+			task<void> then(std::function<void()> func)
+			{
+				co_await *this;
+				func();
+			}
+
+			template <typename... Args>
+			static task create(std::function<T(Args...)> func, Args... args)
+			{
+				co_return func(args...);
+			}
+
+			T run_sync()
+			{
+				return sync_wait(*this);
+			}
+
+		private:
+			std::coroutine_handle<promise_type> m_coroutine;
+		};
+
+		namespace detail
+		{
+			template <typename T>
+			task<T> task_promise<T>::get_return_object() noexcept
+			{
+				return task<T>{std::coroutine_handle<task_promise>::from_promise(*this)};
+			}
+
+			inline task<void> task_promise<void>::get_return_object() noexcept
+			{
+				return task<void>{std::coroutine_handle<task_promise>::from_promise(*this)};
+			}
+
+			template <typename T>
+			task<T &> task_promise<T &>::get_return_object() noexcept
+			{
+				return task<T &>{std::coroutine_handle<task_promise>::from_promise(*this)};
+			}
+		}
+
+		template <awaitable AWAITABLE>
+		auto make_task(AWAITABLE awaitable)
+			-> task<typename awaitable_traits<AWAITABLE>::awaiter_return_type>
+		{
+			co_return co_await static_cast<AWAITABLE &&>(awaitable);
 		}
 	}
 
